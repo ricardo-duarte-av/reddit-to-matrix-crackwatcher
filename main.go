@@ -106,18 +106,34 @@ type GameEntry struct {
 	Review string
 }
 
-// extractGamesFromTable parses the Daily Releases table and returns game entries
-func extractGamesFromTable(table string) []GameEntry {
+// extractGamesFromTable parses the Daily Releases Markdown table and returns game entries
+func extractGamesFromTable(body string) []GameEntry {
 	var games []GameEntry
-	lines := strings.Split(table, "\n")
-	for _, line := range lines {
-		fields := strings.Split(line, "\t")
+	lines := strings.Split(body, "\n")
+	inTable := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inTable {
+			if strings.HasPrefix(trimmed, "Game | Group | Stores | Review") {
+				inTable = true
+				continue // skip header
+			}
+			continue
+		}
+		// End of table: next header, empty line, or start of updates
+		if trimmed == "" || strings.HasPrefix(trimmed, "Update | Group | Stores | Reviews") {
+			break
+		}
+		if strings.HasPrefix(trimmed, "---") {
+			continue // skip markdown separator
+		}
+		fields := strings.Split(trimmed, "|")
 		if len(fields) < 4 {
 			continue
 		}
-		// Ignore update rows (first column contains 'Update')
-		if strings.HasPrefix(fields[0], "Update") {
-			continue
+		// Trim all fields
+		for j := range fields {
+			fields[j] = strings.TrimSpace(fields[j])
 		}
 		games = append(games, GameEntry{
 			Name:   fields[0],
