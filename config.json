@@ -1,0 +1,15 @@
+{
+  "reddit_client_id": "X3J6Pj5gTK6W8rv5zYEwfA",
+  "reddit_client_secret": "aisqZVsENgIcmrRfQrzXZJtYZZ6-rQ",
+  "reddit_user_agent": "script:reddit_post_tracker:v1.0 (by u/daedric)",
+  "reddit_username": "daedric",
+  "reddit_password": "",
+  "subreddit_name": "CrackWatch",
+  "igdb_client_id": "f468pl8oowm75mla8xbd24d06xytmy",
+  "igdb_client_secret": "bo8pgbjd8wwegiu6gn2lrjc4x1r62k",
+  "matrix_homeserver": "https://aguiarvieira.pt",
+  "matrix_user": "dabot",
+  "matrix_password": "dabot1234dabot",
+  "matrix_access_token": "syt_ZGFib3Q_FYcJbhrVvExkpCJeVoul_1EwtEz",
+  "matrix_room_id": "!NjbYoMPkgogJgatXtI:aguiarvieira.pt"
+}
