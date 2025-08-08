@@ -185,6 +185,7 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			games := extractGamesFromTable(post.Body)
 			if len(games) == 0 {
 				log.Printf("No games found in post: %s", post.Title)
+				fmt.Println("--- Post Body Debug ---\n" + post.Body + "\n--- End Post Body ---")
 				markPostProcessed(db, post.ID)
 				continue
 			}
