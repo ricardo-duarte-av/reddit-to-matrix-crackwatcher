@@ -114,32 +114,36 @@ func extractGamesFromTable(body string) []GameEntry {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inTable {
-			if strings.HasPrefix(trimmed, "Game | Group | Stores | Review") {
+			if strings.Contains(trimmed, "| Game | Group | Stores | Review |") {
 				inTable = true
 				continue // skip header
 			}
 			continue
 		}
 		// End of table: next header, empty line, or start of updates
-		if trimmed == "" || strings.HasPrefix(trimmed, "Update | Group | Stores | Reviews") {
+		if trimmed == "" || strings.Contains(trimmed, "| Update | Group | Stores | Reviews |") {
 			break
 		}
-		if strings.HasPrefix(trimmed, "---") {
+		if strings.HasPrefix(trimmed, "| :") || strings.HasPrefix(trimmed, "|:--") || strings.HasPrefix(trimmed, "| ---") {
 			continue // skip markdown separator
 		}
+		if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+			continue // skip non-table lines
+		}
 		fields := strings.Split(trimmed, "|")
-		if len(fields) < 4 {
+		if len(fields) < 6 { // because of leading/trailing pipes, expect at least 6 fields
 			continue
 		}
-		// Trim all fields
-		for j := range fields {
-			fields[j] = strings.TrimSpace(fields[j])
-		}
+		// fields[0] and fields[len-1] are empty due to leading/trailing pipe
+		name := strings.TrimSpace(fields[1])
+		group := strings.TrimSpace(fields[2])
+		stores := strings.TrimSpace(fields[3])
+		review := strings.TrimSpace(fields[4])
 		games = append(games, GameEntry{
-			Name:   fields[0],
-			Group:  fields[1],
-			Stores: fields[2],
-			Review: fields[3],
+			Name:   name,
+			Group:  group,
+			Stores: stores,
+			Review: review,
 		})
 	}
 	return games
