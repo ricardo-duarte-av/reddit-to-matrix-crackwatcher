@@ -4,14 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"strings"
 	"time"
 
+	"bytes"
+	"database/sql"
+	"image"
+	"image/jpeg"
+	"image/png"
+	"net/http"
+
+	igdb "github.com/Henry-Sarabia/igdb/v2"
+	"github.com/buckket/go-blurhash"
+	"github.com/disintegration/imaging"
 	reddit "github.com/vartanbeno/go-reddit/v2/reddit"
+	_ "golang.org/x/image/webp"
 	mautrix "maunium.net/go/mautrix"
+	mautrixEvent "maunium.net/go/mautrix/event"
+	mautrixID "maunium.net/go/mautrix/id"
 )
 
 // Config holds API keys and secrets
@@ -49,7 +62,7 @@ func saveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(path, data, 0600)
+	return os.WriteFile(path, data, 0600)
 }
 
 func getMatrixClient(cfg *Config, configPath string) (*mautrix.Client, error) {
@@ -115,7 +128,7 @@ func extractGamesFromTable(table string) []GameEntry {
 	return games
 }
 
-func monitorReddit(cfg *Config) {
+func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 	client, err := reddit.NewClient(reddit.Credentials{
 		ID:       cfg.RedditClientID,
 		Secret:   cfg.RedditClientSecret,
@@ -126,7 +139,8 @@ func monitorReddit(cfg *Config) {
 		log.Fatalf("Failed to create Reddit client: %v", err)
 	}
 
-	seen := make(map[string]bool)
+	igdbClient := getIGDBClient(cfg)
+
 	for {
 		posts, _, err := client.Subreddit.NewPosts(context.Background(), cfg.SubredditName, &reddit.ListOptions{Limit: 10})
 		if err != nil {
@@ -135,20 +149,276 @@ func monitorReddit(cfg *Config) {
 			continue
 		}
 		for _, post := range posts {
-			if seen[post.ID] {
+			if !strings.HasPrefix(strings.ToLower(post.Title), "daily release") {
 				continue
 			}
-			if strings.HasPrefix(post.Title, "Daily Releases ") {
-				fmt.Printf("Found Daily Releases post: %s\n", post.Title)
-				games := extractGamesFromTable(post.Body)
-				for _, game := range games {
-					fmt.Printf("Game: %+v\n", game)
+			processed, err := isPostProcessed(db, post.ID)
+			if err != nil {
+				log.Printf("DB error: %v", err)
+				continue
+			}
+			if processed {
+				continue
+			}
+			// Extract and send game table
+			games := extractGamesFromTable(post.Body)
+			if len(games) == 0 {
+				log.Printf("No games found in post: %s", post.Title)
+				markPostProcessed(db, post.ID)
+				continue
+			}
+			// Format table for Matrix
+			tableMsg := "[b]Daily Releases[/b]\n\nGame | Group | Stores | Review\n--- | --- | --- | ---\n"
+			for _, game := range games {
+				tableMsg += fmt.Sprintf("%s | %s | %s | %s\n", game.Name, game.Group, game.Stores, game.Review)
+			}
+			err = sendMatrixText(matrixClient, cfg.MatrixRoomID, tableMsg)
+			if err != nil {
+				log.Printf("Matrix send error: %v", err)
+			}
+			// For each game, query IGDB and send info/screenshots
+			for _, game := range games {
+				igdbInfo, err := fetchIGDBInfo(igdbClient, game.Name)
+				if err != nil {
+					log.Printf("IGDB lookup failed for %s: %v", game.Name, err)
+					continue
+				}
+				// Send game info
+				msg := fmt.Sprintf("[b]%s[/b]\n[URL=%s]IGDB Link[/URL]\nDate: %d\n\n%s\n\n%s", igdbInfo.Title, igdbInfo.IGDBURL, igdbInfo.Date, igdbInfo.Summary, igdbInfo.Storyline)
+				err = sendMatrixText(matrixClient, cfg.MatrixRoomID, msg)
+				if err != nil {
+					log.Printf("Matrix send error: %v", err)
+				}
+				// Send cover
+				if igdbInfo.CoverURL != "" {
+					postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, igdbInfo.CoverURL, fmt.Sprintf("%s cover", igdbInfo.Title))
+				}
+				// Send screenshots
+				for _, screenshot := range igdbInfo.Screenshots {
+					postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, screenshot, fmt.Sprintf("%s screenshot", igdbInfo.Title))
 				}
 			}
-			seen[post.ID] = true
+			// Mark post as processed
+			markPostProcessed(db, post.ID)
 		}
 		time.Sleep(60 * time.Second)
 	}
+}
+
+// IGDBGameInfo holds the info we want from IGDB
+type IGDBGameInfo struct {
+	Title       string
+	Date        int64
+	Summary     string
+	Storyline   string
+	IGDBURL     string
+	CoverURL    string
+	Screenshots []string
+}
+
+func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
+	games, err := client.Games.Search(name, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots"), igdb.SetLimit(1))
+	if err != nil || len(games) == 0 {
+		return nil, fmt.Errorf("game not found or error: %v", err)
+	}
+	g := games[0]
+	info := &IGDBGameInfo{
+		Title:     g.Name,
+		Date:      int64(g.FirstReleaseDate),
+		Summary:   g.Summary,
+		Storyline: g.Storyline,
+		IGDBURL:   fmt.Sprintf("https://www.igdb.com/games/%s", g.Slug),
+	}
+	// Fetch cover if present
+	if g.Cover != 0 {
+		cover, err := client.Covers.Get(g.Cover)
+		if err == nil && cover != nil {
+			info.CoverURL = "https://images.igdb.com/igdb/image/upload/t_cover_big/" + cover.ImageID + ".jpg"
+		}
+	}
+	// Fetch screenshots if present
+	for _, id := range g.Screenshots {
+		sc, err := client.Screenshots.Get(id)
+		if err == nil && sc != nil {
+			info.Screenshots = append(info.Screenshots, "https://images.igdb.com/igdb/image/upload/t_screenshot_big/"+sc.ImageID+".jpg")
+		}
+	}
+	return info, nil
+}
+
+func getIGDBClient(cfg *Config) *igdb.Client {
+	return igdb.NewClient(cfg.IGDBClientID, cfg.IGDBClientSecret, nil)
+}
+
+// Example usage in monitorReddit (for each game):
+// igdbClient, _ := getIGDBClient(cfg)
+// info, err := fetchIGDBInfo(igdbClient, game.Name)
+// if err == nil { fmt.Printf("IGDB: %+v\n", info) }
+
+// downloadImage downloads an image from a URL and returns the image.Image and its bytes
+func downloadImage(url string) (image.Image, []byte, string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer resp.Body.Close()
+	imgBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	img, format, err := image.Decode(bytes.NewReader(imgBytes))
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return img, imgBytes, format, nil
+}
+
+// generateThumbnail resizes the image to the given width and height
+func generateThumbnail(img image.Image, width, height int) image.Image {
+	return imaging.Resize(img, width, height, imaging.Lanczos)
+}
+
+// encodeImage encodes an image.Image to bytes in the given format
+func encodeImage(img image.Image, format string) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	switch format {
+	case "jpeg":
+		if err := jpeg.Encode(buf, img, nil); err != nil {
+			return nil, err
+		}
+	case "png":
+		if err := png.Encode(buf, img); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported format: %s", format)
+	}
+	return buf.Bytes(), nil
+}
+
+// calcBlurhash calculates the blurhash for an image.Image
+func calcBlurhash(img image.Image) (string, error) {
+	return blurhash.Encode(4, 3, img)
+}
+
+// MatrixImageInfo is a struct for Matrix image info
+type MatrixImageInfo struct {
+	Mimetype      string                 `json:"mimetype,omitempty"`
+	Size          int                    `json:"size,omitempty"`
+	W             int                    `json:"w,omitempty"`
+	H             int                    `json:"h,omitempty"`
+	ThumbnailURL  string                 `json:"thumbnail_url,omitempty"`
+	ThumbnailInfo *MatrixImageInfo       `json:"thumbnail_info,omitempty"`
+	Additional    map[string]interface{} `json:"-"`
+}
+
+// uploadToMatrix uploads an image to Matrix and returns the MXC URL and info
+func uploadToMatrix(client *mautrix.Client, filename string, imgBytes []byte, mimetype string, width, height int) (string, *MatrixImageInfo, error) {
+	req := mautrix.ReqUploadMedia{
+		ContentBytes: imgBytes,
+		ContentType:  mimetype,
+		FileName:     filename,
+	}
+	uploadResp, err := client.UploadMedia(context.Background(), req)
+	if err != nil {
+		return "", nil, err
+	}
+	info := &MatrixImageInfo{
+		Mimetype: mimetype,
+		Size:     len(imgBytes),
+		W:        width,
+		H:        height,
+	}
+	return uploadResp.ContentURI.String(), info, nil
+}
+
+// sendMatrixImage sends an m.image event to the Matrix room
+func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string) error {
+	imgInfo.ThumbnailURL = thumbURL
+	imgInfo.ThumbnailInfo = thumbInfo
+	if blurhash != "" {
+		if imgInfo.Additional == nil {
+			imgInfo.Additional = map[string]interface{}{}
+		}
+		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
+	}
+	content := map[string]interface{}{
+		"msgtype":  "m.image",
+		"body":     caption,
+		"url":      imgURL,
+		"info":     imgInfo,
+		"filename": filename,
+	}
+	for k, v := range imgInfo.Additional {
+		content[k] = v
+	}
+	_, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
+	return err
+}
+
+// sendMatrixText sends a plain text message to Matrix
+func sendMatrixText(client *mautrix.Client, roomID, msg string) error {
+	content := map[string]interface{}{
+		"msgtype": "m.text",
+		"body":    msg,
+	}
+	_, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
+	return err
+}
+
+// postIGDBImageToMatrix downloads, thumbs, blurhashes, uploads, and posts an image to Matrix
+func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption string) {
+	img, imgBytes, format, err := downloadImage(imgURL)
+	if err != nil {
+		log.Printf("Failed to download image: %v", err)
+		return
+	}
+	thumb := generateThumbnail(img, 225, 300)
+	thumbBytes, _ := encodeImage(thumb, format)
+	blur, _ := calcBlurhash(thumb)
+	imgMimetype := "image/" + format
+	thumbMimetype := imgMimetype
+	imgURLMXC, imgInfo, err := uploadToMatrix(client, caption+".webp", imgBytes, imgMimetype, img.Bounds().Dx(), img.Bounds().Dy())
+	if err != nil {
+		log.Printf("Failed to upload image: %v", err)
+		return
+	}
+	thumbURLMXC, thumbInfo, err := uploadToMatrix(client, caption+"_thumb.webp", thumbBytes, thumbMimetype, thumb.Bounds().Dx(), thumb.Bounds().Dy())
+	if err != nil {
+		log.Printf("Failed to upload thumbnail: %v", err)
+		return
+	}
+	err = sendMatrixImage(client, roomID, caption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur)
+	if err != nil {
+		log.Printf("Failed to send image event: %v", err)
+	}
+}
+
+// DB schema: processed_posts(post_id TEXT PRIMARY KEY)
+func initDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS processed_posts (post_id TEXT PRIMARY KEY)`)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func isPostProcessed(db *sql.DB, postID string) (bool, error) {
+	var id string
+	err := db.QueryRow(`SELECT post_id FROM processed_posts WHERE post_id = ?`, postID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func markPostProcessed(db *sql.DB, postID string) error {
+	_, err := db.Exec(`INSERT OR IGNORE INTO processed_posts (post_id) VALUES (?)`, postID)
+	return err
 }
 
 func main() {
@@ -164,6 +434,17 @@ func main() {
 		log.Fatalf("Failed to initialize Matrix client: %v", err)
 	}
 
+	// Initialize DB
+	db, err := initDB("processed_posts.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize DB: %v", err)
+	}
+	defer db.Close()
+
 	// Start Reddit monitoring
-	monitorReddit(cfg)
+	matrixClient, err := getMatrixClient(cfg, "config.json")
+	if err != nil {
+		log.Fatalf("Failed to get Matrix client for monitoring: %v", err)
+	}
+	monitorReddit(cfg, db, matrixClient)
 }

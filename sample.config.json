@@ -1,0 +1,15 @@
+{
+  "reddit_client_id": "YOUR_REDDIT_CLIENT_ID",
+  "reddit_client_secret": "YOUR_REDDIT_CLIENT_SECRET",
+  "reddit_user_agent": "YOUR_USER_AGENT",
+  "reddit_username": "YOUR_REDDIT_USERNAME",
+  "reddit_password": "YOUR_REDDIT_PASSWORD",
+  "subreddit_name": "CrackWatch",
+  "igdb_client_id": "YOUR_IGDB_CLIENT_ID",
+  "igdb_client_secret": "YOUR_IGDB_CLIENT_SECRET",
+  "matrix_homeserver": "https://your-matrix-server",
+  "matrix_user": "YOUR_MATRIX_USER",
+  "matrix_password": "YOUR_MATRIX_PASSWORD",
+  "matrix_access_token": "YOUR_MATRIX_ACCESS_TOKEN",
+  "matrix_room_id": "!yourroomid:your-matrix-server"
+}
