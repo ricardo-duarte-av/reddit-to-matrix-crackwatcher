@@ -143,6 +143,7 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 	igdbClient := getIGDBClient(cfg)
 
 	for {
+		log.Println("Fetching new posts from Reddit...")
 		posts, _, err := client.Subreddit.NewPosts(context.Background(), cfg.SubredditName, &reddit.ListOptions{Limit: 10})
 		if err != nil {
 			log.Printf("Error fetching posts: %v", err)
@@ -153,14 +154,17 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			if !strings.HasPrefix(strings.ToLower(post.Title), "daily release") {
 				continue
 			}
+			log.Printf("Found candidate post: %s (ID: %s)", post.Title, post.ID)
 			processed, err := isPostProcessed(db, post.ID)
 			if err != nil {
 				log.Printf("DB error: %v", err)
 				continue
 			}
 			if processed {
+				log.Printf("Post already processed: %s", post.ID)
 				continue
 			}
+			log.Printf("Processing new post: %s", post.ID)
 			// Extract and send game table
 			games := extractGamesFromTable(post.Body)
 			if len(games) == 0 {
@@ -173,12 +177,14 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			for _, game := range games {
 				tableMsg += fmt.Sprintf("%s | %s | %s | %s\n", game.Name, game.Group, game.Stores, game.Review)
 			}
+			log.Printf("Sending game table to Matrix for post: %s", post.ID)
 			err = sendMatrixText(matrixClient, cfg.MatrixRoomID, tableMsg)
 			if err != nil {
 				log.Printf("Matrix send error: %v", err)
 			}
 			// For each game, query IGDB and send info/screenshots
 			for _, game := range games {
+				log.Printf("Querying IGDB for game: %s", game.Name)
 				igdbInfo, err := fetchIGDBInfo(igdbClient, game.Name)
 				if err != nil {
 					log.Printf("IGDB lookup failed for %s: %v", game.Name, err)
@@ -186,22 +192,27 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 				}
 				// Send game info
 				msg := fmt.Sprintf("[b]%s[/b]\n[URL=%s]IGDB Link[/URL]\nDate: %d\n\n%s\n\n%s", igdbInfo.Title, igdbInfo.IGDBURL, igdbInfo.Date, igdbInfo.Summary, igdbInfo.Storyline)
+				log.Printf("Sending IGDB info to Matrix for game: %s", igdbInfo.Title)
 				err = sendMatrixText(matrixClient, cfg.MatrixRoomID, msg)
 				if err != nil {
 					log.Printf("Matrix send error: %v", err)
 				}
 				// Send cover
 				if igdbInfo.CoverURL != "" {
+					log.Printf("Sending cover image to Matrix for game: %s", igdbInfo.Title)
 					postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, igdbInfo.CoverURL, fmt.Sprintf("%s cover", igdbInfo.Title))
 				}
 				// Send screenshots
 				for _, screenshot := range igdbInfo.Screenshots {
+					log.Printf("Sending screenshot to Matrix for game: %s", igdbInfo.Title)
 					postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, screenshot, fmt.Sprintf("%s screenshot", igdbInfo.Title))
 				}
 			}
 			// Mark post as processed
+			log.Printf("Marking post as processed: %s", post.ID)
 			markPostProcessed(db, post.ID)
 		}
+		log.Println("Reddit monitoring cycle complete. Sleeping...")
 		time.Sleep(60 * time.Second)
 	}
 }
@@ -423,11 +434,12 @@ func markPostProcessed(db *sql.DB, postID string) error {
 }
 
 func main() {
+	log.Println("Starting reddit-to-matrix-crackwatcher...")
 	cfg, err := loadConfig("config.json")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	fmt.Println("Config loaded. Ready to start Reddit/IGDB/Matrix logic.")
+	log.Println("Config loaded.")
 
 	// Example: Initialize Matrix client and store token if needed
 	_, err = getMatrixClient(cfg, "config.json")
@@ -440,6 +452,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize DB: %v", err)
 	}
+	log.Println("SQLite DB initialized.")
 	defer db.Close()
 
 	// Start Reddit monitoring
@@ -447,5 +460,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get Matrix client for monitoring: %v", err)
 	}
+	log.Println("Matrix client initialized.")
 	monitorReddit(cfg, db, matrixClient)
 }
