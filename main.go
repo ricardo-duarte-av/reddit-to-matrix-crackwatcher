@@ -111,7 +111,7 @@ func extractGamesFromTable(body string) []GameEntry {
 	var games []GameEntry
 	lines := strings.Split(body, "\n")
 	inTable := false
-	for i, line := range lines {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inTable {
 			if strings.HasPrefix(trimmed, "Game | Group | Stores | Review") {
