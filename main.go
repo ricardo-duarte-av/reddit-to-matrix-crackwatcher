@@ -22,7 +22,7 @@ import (
 	"github.com/disintegration/imaging"
 	_ "github.com/mattn/go-sqlite3"
 	reddit "github.com/vartanbeno/go-reddit/v2/reddit"
-	_ "golang.org/x/image/webp"
+	"golang.org/x/image/webp"
 	mautrix "maunium.net/go/mautrix"
 	mautrixEvent "maunium.net/go/mautrix/event"
 	mautrixID "maunium.net/go/mautrix/id"
