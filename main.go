@@ -266,20 +266,24 @@ func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
 		Storyline: g.Storyline,
 		IGDBURL:   fmt.Sprintf("https://www.igdb.com/games/%s", g.Slug),
 	}
+        log.Printf(g.Name)
+        log.Printf(g.Slug)
 	// Fetch cover if present
     if g.Cover != 0 {
-        cover, err := client.Covers.Get(g.Cover)
-        if err == nil && cover != nil && cover.ImageID != "" {
-            info.CoverURL = "https://images.igdb.com/igdb/image/upload/t_original/" + cover.ImageID + ".webp"
+        cover, err := client.Covers.Get(g.Cover, igdb.SetFields("url,image_id,width,height"))
+        if err == nil && cover != nil && cover.Image.ImageID != "" {
+            info.CoverURL = "https://images.igdb.com/igdb/image/upload/t_original/" + cover.Image.ImageID + ".webp"
+            log.Printf("Cover URL: %s", info.CoverURL) 
         } else {
-            log.Printf("No valid cover ImageID for game: %s -- $v", g.Name, err)
+            log.Printf("No valid cover ImageID for game: %s -- %+v", g.Name, cover.Image)
         }
     }
 	// Fetch screenshots if present
     for _, id := range g.Screenshots {
-        sc, err := client.Screenshots.Get(id)
-        if err == nil && sc != nil && sc.ImageID != "" {
-            info.Screenshots = append(info.Screenshots, "https://images.igdb.com/igdb/image/upload/t_original/" + sc.ImageID + ".webp")
+        sc, err := client.Screenshots.Get(id, igdb.SetFields("url,image_id,width,height"))
+        if err == nil && sc != nil && sc.Image.ImageID != "" {
+            info.Screenshots = append(info.Screenshots, "https://images.igdb.com/igdb/image/upload/t_original/" + sc.Image.ImageID + ".webp")
+            log.Printf("Screenshot URLs: %s", info.Screenshots)
         } else {
             log.Printf("No valid screenshot ImageID for game: %s, screenshot id: %d", g.Name, id)
         }

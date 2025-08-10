@@ -32,3 +32,4 @@ go.work.sum
 # .vscode/
 
 config.json
+processed_posts.db
