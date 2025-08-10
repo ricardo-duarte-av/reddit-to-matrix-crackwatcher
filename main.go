@@ -334,46 +334,74 @@ func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
 // info, err := fetchIGDBInfo(igdbClient, game.Name)
 // if err == nil { fmt.Printf("IGDB: %+v\n", info) }
 
-// downloadImage downloads an image from a URL and returns the image.Image and its bytes
-// downloadImage downloads an image from a URL and returns the image.Image and its bytes and format
+// downloadImage downloads an image from a URL and returns the image.Image, its bytes, and format
 func downloadImage(url string) (image.Image, []byte, string, error) {
+    log.Printf("Attempting to download image: %s", url)
     resp, err := http.Get(url)
     if err != nil {
+        log.Printf("HTTP request error: %v", err)
         return nil, nil, "", err
     }
     defer resp.Body.Close()
+
+    log.Printf("HTTP Status: %s", resp.Status)
+    contentType := resp.Header.Get("Content-Type")
+    log.Printf("Content-Type: %s", contentType)
+
     imgBytes, err := io.ReadAll(resp.Body)
     if err != nil {
+        log.Printf("Failed to read body: %v", err)
         return nil, nil, "", err
     }
+    if len(imgBytes) < 32 {
+        log.Printf("Image bytes too short: %d", len(imgBytes))
+    }
+    // Print first 16 bytes as hex for debugging
+    log.Printf("First 16 bytes: %x", imgBytes[:min(16, len(imgBytes))])
 
-    // Try to decode using standard image.Decode
+    // Try generic image.Decode
     img, format, err := image.Decode(bytes.NewReader(imgBytes))
     if err == nil {
+        log.Printf("Decoded using image.Decode, format: %s", format)
         return img, imgBytes, format, nil
     }
+    log.Printf("image.Decode failed: %v", err)
 
-    // Try decoding as WebP
+    // Try WebP
     img, errWebp := webp.Decode(bytes.NewReader(imgBytes))
     if errWebp == nil {
+        log.Printf("Decoded using webp.Decode")
         return img, imgBytes, "webp", nil
     }
+    log.Printf("webp.Decode failed: %v", errWebp)
 
-    // Try JPEG explicitly
+    // Try JPEG
     img, errJpeg := jpeg.Decode(bytes.NewReader(imgBytes))
     if errJpeg == nil {
+        log.Printf("Decoded using jpeg.Decode")
         return img, imgBytes, "jpeg", nil
     }
+    log.Printf("jpeg.Decode failed: %v", errJpeg)
 
-    // Try PNG explicitly
+    // Try PNG
     img, errPng := png.Decode(bytes.NewReader(imgBytes))
     if errPng == nil {
+        log.Printf("Decoded using png.Decode")
         return img, imgBytes, "png", nil
     }
+    log.Printf("png.Decode failed: %v", errPng)
 
-    // If all decoders fail, return the error from image.Decode
+    // All decoders failed
     return nil, nil, "", err
 }
+
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
 
 // generateThumbnail resizes the image to the given width and height
 func generateThumbnail(img image.Image, width, height int) image.Image {
