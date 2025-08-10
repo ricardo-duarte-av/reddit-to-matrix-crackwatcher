@@ -272,7 +272,7 @@ func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
         if err == nil && cover != nil && cover.ImageID != "" {
             info.CoverURL = "https://images.igdb.com/igdb/image/upload/t_original/" + cover.ImageID + ".webp"
         } else {
-            log.Printf("No valid cover ImageID for game: %s", g.Name)
+            log.Printf("No valid cover ImageID for game: %s -- $v", g.Name, err)
         }
     }
 	// Fetch screenshots if present
