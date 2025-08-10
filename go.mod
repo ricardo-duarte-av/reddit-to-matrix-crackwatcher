@@ -34,5 +34,5 @@ require (
 	golang.org/x/text v0.28.0 // indirect
 	google.golang.org/appengine v1.4.0 // indirect
 	maunium.net/go/mautrix v0.24.2 // indirect
-    golang.org/x/image/webp
+    golang.org/x/image/webp latest
 )
