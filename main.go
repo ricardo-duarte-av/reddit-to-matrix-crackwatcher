@@ -335,21 +335,44 @@ func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
 // if err == nil { fmt.Printf("IGDB: %+v\n", info) }
 
 // downloadImage downloads an image from a URL and returns the image.Image and its bytes
+// downloadImage downloads an image from a URL and returns the image.Image and its bytes and format
 func downloadImage(url string) (image.Image, []byte, string, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	defer resp.Body.Close()
-	imgBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	img, format, err := image.Decode(bytes.NewReader(imgBytes))
-	if err != nil {
-		return nil, nil, "", err
-	}
-	return img, imgBytes, format, nil
+    resp, err := http.Get(url)
+    if err != nil {
+        return nil, nil, "", err
+    }
+    defer resp.Body.Close()
+    imgBytes, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, nil, "", err
+    }
+
+    // Try to decode using standard image.Decode
+    img, format, err := image.Decode(bytes.NewReader(imgBytes))
+    if err == nil {
+        return img, imgBytes, format, nil
+    }
+
+    // Try decoding as WebP
+    img, errWebp := webp.Decode(bytes.NewReader(imgBytes))
+    if errWebp == nil {
+        return img, imgBytes, "webp", nil
+    }
+
+    // Try JPEG explicitly
+    img, errJpeg := jpeg.Decode(bytes.NewReader(imgBytes))
+    if errJpeg == nil {
+        return img, imgBytes, "jpeg", nil
+    }
+
+    // Try PNG explicitly
+    img, errPng := png.Decode(bytes.NewReader(imgBytes))
+    if errPng == nil {
+        return img, imgBytes, "png", nil
+    }
+
+    // If all decoders fail, return the error from image.Decode
+    return nil, nil, "", err
 }
 
 // generateThumbnail resizes the image to the given width and height
