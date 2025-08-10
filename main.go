@@ -16,8 +16,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
-	"net/url"
-
+	
 	igdb "github.com/Henry-Sarabia/igdb/v2"
 	"github.com/buckket/go-blurhash"
 	"github.com/disintegration/imaging"
