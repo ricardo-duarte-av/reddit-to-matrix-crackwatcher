@@ -16,6 +16,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
+	"net/url"
 
 	igdb "github.com/Henry-Sarabia/igdb/v2"
 	"github.com/buckket/go-blurhash"
@@ -160,7 +161,11 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 		log.Fatalf("Failed to create Reddit client: %v", err)
 	}
 
-	igdbClient := getIGDBClient(cfg)
+    igdbClient, err := getIGDBClient(cfg)
+    if err != nil {
+        log.Printf("Failed to initialize IGDB client: %v", err)
+        return
+    }
 
 	for {
 		log.Println("Fetching new posts from Reddit...")
@@ -279,9 +284,51 @@ func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
 	return info, nil
 }
 
-func getIGDBClient(cfg *Config) *igdb.Client {
-	return igdb.NewClient(cfg.IGDBClientID, cfg.IGDBClientSecret, nil)
+type IGDBAuthTransport struct {
+    Token     string
+    ClientID  string
+    Transport http.RoundTripper
 }
+
+func (t *IGDBAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    req.Header.Set("Authorization", "Bearer "+t.Token)
+    req.Header.Set("Client-ID", t.ClientID)
+    return t.Transport.RoundTrip(req)
+}
+
+func getIGDBClient(cfg *Config) (*igdb.Client, error) {
+    token, err := getIGDBAccessToken(cfg.IGDBClientID, cfg.IGDBClientSecret)
+    if err != nil {
+        return nil, err
+    }
+    httpClient := &http.Client{
+        Transport: &IGDBAuthTransport{
+            Token:    token,
+            ClientID: cfg.IGDBClientID,
+            Transport: http.DefaultTransport,
+        },
+    }
+    return igdb.NewClient(cfg.IGDBClientID, "", httpClient), nil
+}
+
+func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
+    url := "https://id.twitch.tv/oauth2/token"
+    data := fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", clientID, clientSecret)
+    resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data))
+    if err != nil {
+        return "", err
+    }
+    defer resp.Body.Close()
+    var res struct {
+        AccessToken string `json:"access_token"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+        return "", err
+    }
+    return res.AccessToken, nil
+}
+
+
 
 // Example usage in monitorReddit (for each game):
 // igdbClient, _ := getIGDBClient(cfg)
