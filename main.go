@@ -220,7 +220,7 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 				// Send game info
 				msg := fmt.Sprintf("[b]%s[/b]\n[URL=%s]IGDB Link[/URL]\nDate: %d\n\n%s\n\n%s", igdbInfo.Title, igdbInfo.IGDBURL, igdbInfo.Date, igdbInfo.Summary, igdbInfo.Storyline)
 				log.Printf("Sending IGDB info to Matrix for game: %s", igdbInfo.Title)
-				EventID, err = sendMatrixText(matrixClient, cfg.MatrixRoomID, msg)
+				EventID, err := sendMatrixText(matrixClient, cfg.MatrixRoomID, msg)
 				if err != nil {
 					log.Printf("Matrix send error: %v", err)
 				}
