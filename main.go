@@ -205,12 +205,14 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			}
 			log.Printf("Sending game table to Matrix for post: %s", post.ID)
                         formatedTableMsg := markdownTableToHTML(tableMsg)
-			_, err = sendMatrixHTML(matrixClient, cfg.MatrixRoomID, tableMsg, formatedTableMsg, "", "")
+			EventID, err := sendMatrixHTML(matrixClient, cfg.MatrixRoomID, tableMsg, formatedTableMsg, "", "")
 			if err != nil {
 				log.Printf("Matrix send error: %v", err)
 			}
 			// For each game, query IGDB and send info/screenshots
 			for _, game := range games {
+                                OriginalEventID := EventID
+                                ReplyID := EventID
 				log.Printf("Querying IGDB for game: %s", game.Name)
 				igdbInfo, err := fetchIGDBInfo(igdbClient, game.Name)
 				if err != nil {
@@ -220,19 +222,22 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 				// Send game info
 				msg := fmt.Sprintf("[b]%s[/b]\n[URL=%s]IGDB Link[/URL]\nDate: %d\n\n%s\n\n%s", igdbInfo.Title, igdbInfo.IGDBURL, igdbInfo.Date, igdbInfo.Summary, igdbInfo.Storyline)
 				log.Printf("Sending IGDB info to Matrix for game: %s", igdbInfo.Title)
-				EventID, err := sendMatrixText(matrixClient, cfg.MatrixRoomID, msg)
+				OriginalEventID, err = sendMatrixText(matrixClient, cfg.MatrixRoomID, msg, "", "")
 				if err != nil {
 					log.Printf("Matrix send error: %v", err)
 				}
+                                log.Printf("Returned event: %s", EventID)
 				// Send cover
 				if igdbInfo.CoverURL != "" {
 					log.Printf("Sending cover image to Matrix for game: %s", igdbInfo.Title)
-					EventID := postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, igdbInfo.CoverURL, fmt.Sprintf("%s cover", igdbInfo.Title))
+					ReplyID, _ = postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, igdbInfo.CoverURL, fmt.Sprintf("%s cover", igdbInfo.Title), OriginalEventID, OriginalEventID)
+                                        log.Printf("Returned event: %s", OriginalEventID)
 				}
 				// Send screenshots
 				for _, screenshot := range igdbInfo.Screenshots {
 					log.Printf("Sending screenshot to Matrix for game: %s", igdbInfo.Title)
-					EventID := postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, screenshot, fmt.Sprintf("%s screenshot", igdbInfo.Title))
+					ReplyID, _ = postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, screenshot, fmt.Sprintf("%s screenshot", igdbInfo.Title), OriginalEventID, ReplyID)
+                                        log.Printf("Return event: %s", ReplyID)
 				}
 			}
 			// Mark post as processed
@@ -473,7 +478,7 @@ func uploadToMatrix(client *mautrix.Client, filename string, imgBytes []byte, mi
 }
 
 // sendMatrixImage sends an m.image event to the Matrix room
-func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string) error {
+func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	imgInfo.ThumbnailURL = thumbURL
 	imgInfo.ThumbnailInfo = thumbInfo
 	if blurhash != "" {
@@ -482,13 +487,41 @@ func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, i
 		}
 		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
 	}
-	content := map[string]interface{}{
-		"msgtype":  "m.image",
-		"body":     caption,
-		"url":      imgURL,
-		"info":     imgInfo,
-		"filename": filename,
-	}
+
+        content := map[string]interface{}{
+                "msgtype":  "m.image",
+                "body":     caption,
+                "url":      imgURL,
+                "info":     imgInfo,
+                "filename": filename,
+        }
+
+
+    // Relationship handling
+    if threadRootID != "" {
+        // Threaded reply: replyID is required
+        if replyID == "" {
+            return "", fmt.Errorf("replyID must be set when replying in a thread")
+        }
+        content["m.relates_to"] = map[string]interface{}{
+            "event_id":        threadRootID,
+            "rel_type":        "m.thread",
+            "is_falling_back": true,
+            "m.in_reply_to": map[string]interface{}{
+                "event_id": replyID,
+            },
+        }
+
+    } else if replyID != "" {
+        // Normal reply (non-threaded)
+        content["m.relates_to"] = map[string]interface{}{
+            "m.in_reply_to": map[string]interface{}{
+                "event_id": replyID,
+            },
+        }
+    }
+
+
 	for k, v := range imgInfo.Additional {
 		content[k] = v
 	}
@@ -497,18 +530,44 @@ func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, i
 }
 
 // sendMatrixText sends a plain text message to Matrix
-func sendMatrixText(client *mautrix.Client, roomID, msg string) (mautrixID.EventID, error) {
+func sendMatrixText(client *mautrix.Client, roomID, msg string,threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	content := map[string]interface{}{
 		"msgtype": "m.text",
 		"body":    msg,
 	}
+
+    // Relationship handling
+    if threadRootID != "" {
+        // Threaded reply: replyID is required
+        if replyID == "" {
+            return "", fmt.Errorf("replyID must be set when replying in a thread")
+        }
+        content["m.relates_to"] = map[string]interface{}{
+            "event_id":        threadRootID,
+            "rel_type":        "m.thread",
+            "is_falling_back": true,
+            "m.in_reply_to": map[string]interface{}{
+                "event_id": replyID,
+            },
+        }
+
+    } else if replyID != "" {
+        // Normal reply (non-threaded)
+        content["m.relates_to"] = map[string]interface{}{
+            "m.in_reply_to": map[string]interface{}{
+                "event_id": replyID,
+            },
+        }
+    }
+
+
 	evt, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
         log.Printf("Event to return: %s", evt.EventID)
 	return evt.EventID, err
 }
 
 // sendMatrixText sends a message with monospace formatting to Matrix
-func sendMatrixTextMonospace(client *mautrix.Client, roomID, msg string) error {
+func sendMatrixTextMonospace(client *mautrix.Client, roomID, msg string) (mautrixID.EventID, error) {
 	content := map[string]interface{}{
 		"msgtype": "m.text",
 		"body":    msg, // fallback for clients that don't support HTML
@@ -579,11 +638,11 @@ func sendMatrixHTML(
 
 
 // postIGDBImageToMatrix downloads, thumbs, blurhashes, uploads, and posts an image to Matrix
-func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption string) {
+func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	img, imgBytes, format, err := downloadImage(imgURL)
 	if err != nil {
 		log.Printf("Failed to download image: %v", err)
-		return
+		return "", err
 	}
 	thumb := generateThumbnail(img, 225, 300)
 	thumbBytes, _ := encodeImage(thumb, format)
@@ -593,18 +652,18 @@ func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption strin
 	imgURLMXC, imgInfo, err := uploadToMatrix(client, caption+".webp", imgBytes, imgMimetype, img.Bounds().Dx(), img.Bounds().Dy())
 	if err != nil {
 		log.Printf("Failed to upload image: %v", err)
-		return
+		return "", err
 	}
 	thumbURLMXC, thumbInfo, err := uploadToMatrix(client, caption+"_thumb.webp", thumbBytes, thumbMimetype, thumb.Bounds().Dx(), thumb.Bounds().Dy())
 	if err != nil {
 		log.Printf("Failed to upload thumbnail: %v", err)
-		return
+		return "", err
 	}
-	EventId, err = sendMatrixImage(client, roomID, caption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur)
+	EventID, err := sendMatrixImage(client, roomID, caption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur, threadRootID, replyID)
 	if err != nil {
 		log.Printf("Failed to send image event: %v", err)
 	}
-        return EventID
+        return EventID, err
 }
 
 // DB schema: processed_posts(post_id TEXT PRIMARY KEY)
