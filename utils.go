@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+        "html"
+        "time"
 )
 
 // markdownTableToHTML converts a Markdown-like table into an HTML table
@@ -63,4 +65,36 @@ func markdownTableToHTML(md string) string {
 func convertLinks(s string) string {
 	re := regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 	return re.ReplaceAllString(s, `<a href="$2">$1</a>`)
+}
+
+// format IGDB info to a Matrix message
+func formatIGDBToHTML(info *IGDBGameInfo) (plainBody string, htmlBody string) {
+    // Format date
+    date := time.Unix(info.Date, 0).Format("2006-01-02") // YYYY-MM-DD
+
+    // Escape all user-provided text for safety
+    title := html.EscapeString(info.Title)
+    url := html.EscapeString(info.IGDBURL)
+    summary := html.EscapeString(info.Summary)
+    storyline := html.EscapeString(info.Storyline)
+
+    // Plain text fallback
+    plainBody = fmt.Sprintf("%s\n%s\nDate: %s", title, url, date)
+    if summary != "" {
+        plainBody += "\n\nSummary: " + summary
+    }
+    if storyline != "" {
+        plainBody += "\n\nStoryline: " + storyline
+    }
+
+    // HTML version
+    htmlBody = fmt.Sprintf(`<a href="%s">%s</a><br>Date: %s`, url, title, date)
+    if summary != "" {
+        htmlBody += fmt.Sprintf(`<br><br><b>Summary:</b> %s`, summary)
+    }
+    if storyline != "" {
+        htmlBody += fmt.Sprintf(`<br><br><b>Storyline:</b> %s`, storyline)
+    }
+
+    return plainBody, htmlBody
 }
