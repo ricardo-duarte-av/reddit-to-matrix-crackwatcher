@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
         "html"
+        "math/rand"
 
 	"bytes"
 	"database/sql"
@@ -151,6 +152,9 @@ func extractGamesFromTable(body string) []GameEntry {
 }
 
 func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
+
+	rand.Seed(time.Now().UnixNano()) // seed the RNG
+
 	client, err := reddit.NewClient(reddit.Credentials{
 		ID:       cfg.RedditClientID,
 		Secret:   cfg.RedditClientSecret,
@@ -250,7 +254,11 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			markPostProcessed(db, post.ID)
 		}
 		log.Println("Reddit monitoring cycle complete. Sleeping...")
-		time.Sleep(60 * time.Second)
+		base := 60                      // base sleep in seconds
+		jitter := rand.Intn(21) - 10     // random int between -10 and +10
+		sleepTime := time.Duration(base+jitter) * time.Second
+
+		time.Sleep(sleepTime)
 	}
 }
 
