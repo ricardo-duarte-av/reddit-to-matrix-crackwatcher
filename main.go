@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
-        "html"
-        "math/rand"
 
 	"bytes"
 	"database/sql"
@@ -18,7 +18,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
-	
+
 	igdb "github.com/Henry-Sarabia/igdb/v2"
 	"github.com/buckket/go-blurhash"
 	"github.com/disintegration/imaging"
@@ -165,11 +165,11 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 		log.Fatalf("Failed to create Reddit client: %v", err)
 	}
 
-    igdbClient, err := getIGDBClient(cfg)
-    if err != nil {
-        log.Printf("Failed to initialize IGDB client: %v", err)
-        return
-    }
+	igdbClient, err := getIGDBClient(cfg)
+	if err != nil {
+		log.Printf("Failed to initialize IGDB client: %v", err)
+		return
+	}
 
 	for {
 		log.Println("Fetching new posts from Reddit...")
@@ -208,15 +208,15 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 				tableMsg += fmt.Sprintf("%s | %s | %s | %s\n", game.Name, game.Group, game.Stores, game.Review)
 			}
 			log.Printf("Sending game table to Matrix for post: %s", post.ID)
-                        formatedTableMsg := markdownTableToHTML(tableMsg)
+			formatedTableMsg := markdownTableToHTML(tableMsg)
 			EventID, err := sendMatrixHTML(matrixClient, cfg.MatrixRoomID, tableMsg, formatedTableMsg, "", "")
 			if err != nil {
 				log.Printf("Matrix send error: %v", err)
 			}
 			// For each game, query IGDB and send info/screenshots
 			for _, game := range games {
-                                OriginalEventID := EventID
-                                ReplyID := EventID
+				OriginalEventID := EventID
+				ReplyID := EventID
 				log.Printf("Querying IGDB for game: %s", game.Name)
 				igdbInfo, err := fetchIGDBInfo(igdbClient, game.Name)
 				if err != nil {
@@ -225,23 +225,23 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 				}
 				// Send game info
 				//msg := fmt.Sprintf("[b]%s[/b]\n[URL=%s]IGDB Link[/URL]\nDate: %d\n\n%s\n\n%s", igdbInfo.Title, igdbInfo.IGDBURL, igdbInfo.Date, igdbInfo.Summary, igdbInfo.Storyline)
-                                plainBody, htmlBody := formatIGDBToHTML(igdbInfo)
+				plainBody, htmlBody := formatIGDBToHTML(igdbInfo)
 				//log.Printf("Sending IGDB info to Matrix for game: %s", igdbInfo.Title)
 				//OriginalEventID, err = sendMatrixHTML(matrixClient, cfg.MatrixRoomID, plainBody, htmlBody, "", "")
 				//if err != nil {
 				//	log.Printf("Matrix send error: %v", err)
 				//}
-                                //log.Printf("Returned event: %s", EventID)
+				//log.Printf("Returned event: %s", EventID)
 
 				// Send cover WITH caption, starting the Thread if cover is available
 				if igdbInfo.CoverURL != "" {
 					log.Printf("Sending cover image to Matrix for game: %s with a caption as thread start", igdbInfo.Title)
 					OriginalEventID, _ = postIGDBImageToMatrix(matrixClient, cfg.MatrixRoomID, igdbInfo.CoverURL, plainBody, htmlBody, "", "")
-                                        ReplyID = OriginalEventID // We set the reply to the OriginalEventID as the first reply in a thread has both with same value
+					ReplyID = OriginalEventID // We set the reply to the OriginalEventID as the first reply in a thread has both with same value
 				} else {
-                                        // No Cover, send a regular text message to start the thread
+					// No Cover, send a regular text message to start the thread
 					OriginalEventID, err = sendMatrixHTML(matrixClient, cfg.MatrixRoomID, plainBody, htmlBody, "", "")
-                                        ReplyID = OriginalEventID // We set the reply to the OriginalEventID as the first reply in a thread has both with same value
+					ReplyID = OriginalEventID // We set the reply to the OriginalEventID as the first reply in a thread has both with same value
 				}
 				// Send screenshots
 				for _, screenshot := range igdbInfo.Screenshots {
@@ -254,8 +254,8 @@ func monitorReddit(cfg *Config, db *sql.DB, matrixClient *mautrix.Client) {
 			markPostProcessed(db, post.ID)
 		}
 		log.Println("Reddit monitoring cycle complete. Sleeping...")
-		base := 60                      // base sleep in seconds
-		jitter := rand.Intn(21) - 10     // random int between -10 and +10
+		base := 60                   // base sleep in seconds
+		jitter := rand.Intn(21) - 10 // random int between -10 and +10
 		sleepTime := time.Duration(base+jitter) * time.Second
 
 		time.Sleep(sleepTime)
@@ -274,88 +274,242 @@ type IGDBGameInfo struct {
 }
 
 func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
-	games, err := client.Games.Search(name, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots"), igdb.SetLimit(1))
-	if err != nil || len(games) == 0 {
-		return nil, fmt.Errorf("game not found or error: %v", err)
+	// Add context with timeout for API calls
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Search for the game with a higher limit to get multiple results
+	games, err := client.Games.Search(name, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots"), igdb.SetLimit(10))
+	if err != nil {
+		return nil, fmt.Errorf("failed to search IGDB for game '%s': %w", name, err)
 	}
-	g := games[0]
+	if len(games) == 0 {
+		return nil, fmt.Errorf("no games found for '%s'", name)
+	}
+
+	// Find the best matching game using our scoring system
+	bestGame := findBestMatch(name, games)
+	if bestGame == nil {
+		return nil, fmt.Errorf("no suitable match found for '%s' among %d results", name, len(games))
+	}
+
 	info := &IGDBGameInfo{
-		Title:     g.Name,
-		Date:      int64(g.FirstReleaseDate),
-		Summary:   g.Summary,
-		Storyline: g.Storyline,
-		IGDBURL:   fmt.Sprintf("https://www.igdb.com/games/%s", g.Slug),
+		Title:     bestGame.Name,
+		Date:      int64(bestGame.FirstReleaseDate),
+		Summary:   bestGame.Summary,
+		Storyline: bestGame.Storyline,
+		IGDBURL:   fmt.Sprintf("https://www.igdb.com/games/%s", bestGame.Slug),
 	}
-        log.Printf(g.Name)
-        log.Printf(g.Slug)
+
 	// Fetch cover if present
-    if g.Cover != 0 {
-        cover, err := client.Covers.Get(g.Cover, igdb.SetFields("url,image_id,width,height"))
-        if err == nil && cover != nil && cover.Image.ImageID != "" {
-            info.CoverURL = "https://images.igdb.com/igdb/image/upload/t_original/" + cover.Image.ImageID + ".webp"
-            log.Printf("Cover URL: %s", info.CoverURL) 
-        } else {
-            log.Printf("No valid cover ImageID for game: %s -- %+v", g.Name, cover.Image)
-        }
-    }
-	// Fetch screenshots if present
-    for _, id := range g.Screenshots {
-        sc, err := client.Screenshots.Get(id, igdb.SetFields("url,image_id,width,height"))
-        if err == nil && sc != nil && sc.Image.ImageID != "" {
-            info.Screenshots = append(info.Screenshots, "https://images.igdb.com/igdb/image/upload/t_original/" + sc.Image.ImageID + ".webp")
-            log.Printf("Screenshot URLs: %s", info.Screenshots)
-        } else {
-            log.Printf("No valid screenshot ImageID for game: %s, screenshot id: %d", g.Name, id)
-        }
-    }
+	if bestGame.Cover != 0 {
+		if err := fetchCover(ctx, client, bestGame.Cover, info); err != nil {
+			log.Printf("Failed to fetch cover for '%s': %v", bestGame.Name, err)
+		}
+	}
+
+	// Fetch screenshots in parallel if present
+	if len(bestGame.Screenshots) > 0 {
+		if err := fetchScreenshots(ctx, client, bestGame.Screenshots, info, bestGame.Name); err != nil {
+			log.Printf("Failed to fetch some screenshots for '%s': %v", bestGame.Name, err)
+		}
+	}
+
 	return info, nil
 }
 
+// findBestMatch implements a scoring system to find the best matching game
+func findBestMatch(searchQuery string, games []*igdb.Game) *igdb.Game {
+	if len(games) == 0 {
+		return nil
+	}
+
+	var bestGame *igdb.Game
+	var bestScore float64
+
+	searchLower := strings.ToLower(strings.TrimSpace(searchQuery))
+
+	for _, game := range games {
+		score := calculateMatchScore(searchLower, game)
+
+		if bestGame == nil || score > bestScore {
+			bestGame = game
+			bestScore = score
+		}
+	}
+
+	log.Printf("Best match for '%s': '%s' (score: %.2f)", searchQuery, bestGame.Name, bestScore)
+	return bestGame
+}
+
+// calculateMatchScore returns a score between 0 and 1, where 1 is a perfect match
+func calculateMatchScore(searchQuery string, game *igdb.Game) float64 {
+	gameName := strings.ToLower(strings.TrimSpace(game.Name))
+
+	// Perfect exact match
+	if gameName == searchQuery {
+		return 1.0
+	}
+
+	// Exact word match (e.g., "subnautica" matches "Subnautica")
+	if gameName == searchQuery {
+		return 0.95
+	}
+
+	// Check if search query is contained in game name
+	if strings.Contains(gameName, searchQuery) {
+		// Bonus for being at the start of the name
+		if strings.HasPrefix(gameName, searchQuery) {
+			return 0.9
+		}
+		return 0.8
+	}
+
+	// Check if game name is contained in search query
+	if strings.Contains(searchQuery, gameName) {
+		return 0.7
+	}
+
+	// Check for word-by-word matching
+	searchWords := strings.Fields(searchQuery)
+	gameWords := strings.Fields(gameName)
+
+	wordMatches := 0
+	for _, searchWord := range searchWords {
+		for _, gameWord := range gameWords {
+			if searchWord == gameWord {
+				wordMatches++
+				break
+			}
+		}
+	}
+
+	if len(searchWords) > 0 {
+		wordScore := float64(wordMatches) / float64(len(searchWords))
+		if wordScore > 0.5 {
+			return wordScore * 0.6 // Cap at 0.6 for partial word matches
+		}
+	}
+
+	// Penalize game packs, collections, and similar titles
+	penaltyWords := []string{
+		"pack", "collection", "bundle", "double", "triple", "quadruple",
+		"complete", "ultimate", "deluxe", "edition", "remastered",
+		"remaster", "definitive", "anniversary", "gold", "platinum",
+		"+", "plus", "and", "&", "with", "featuring", "including",
+	}
+
+	for _, penaltyWord := range penaltyWords {
+		if strings.Contains(gameName, penaltyWord) {
+			return 0.1 // Heavy penalty for pack/collection titles
+		}
+	}
+
+	// Very low score for no match
+	return 0.0
+}
+
+// fetchCover fetches the cover image for a game
+func fetchCover(ctx context.Context, client *igdb.Client, coverID int, info *IGDBGameInfo) error {
+	cover, err := client.Covers.Get(coverID, igdb.SetFields("url,image_id,width,height"))
+	if err != nil {
+		return fmt.Errorf("failed to get cover: %w", err)
+	}
+	if cover == nil || cover.Image.ImageID == "" {
+		return fmt.Errorf("no valid cover image found")
+	}
+
+	info.CoverURL = fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_original/%s.webp", cover.Image.ImageID)
+	return nil
+}
+
+// fetchScreenshots fetches screenshots in parallel
+func fetchScreenshots(ctx context.Context, client *igdb.Client, screenshotIDs []int, info *IGDBGameInfo, gameName string) error {
+	// Create a channel to collect results
+	type screenshotResult struct {
+		url string
+		err error
+	}
+	resultChan := make(chan screenshotResult, len(screenshotIDs))
+
+	// Launch goroutines for each screenshot
+	for _, id := range screenshotIDs {
+		go func(screenshotID int) {
+			sc, err := client.Screenshots.Get(screenshotID, igdb.SetFields("url,image_id,width,height"))
+			if err != nil {
+				resultChan <- screenshotResult{err: fmt.Errorf("failed to get screenshot %d: %w", screenshotID, err)}
+				return
+			}
+			if sc == nil || sc.Image.ImageID == "" {
+				resultChan <- screenshotResult{err: fmt.Errorf("no valid screenshot image for ID %d", screenshotID)}
+				return
+			}
+
+			url := fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_original/%s.webp", sc.Image.ImageID)
+			resultChan <- screenshotResult{url: url}
+		}(id)
+	}
+
+	// Collect results
+	for i := 0; i < len(screenshotIDs); i++ {
+		select {
+		case result := <-resultChan:
+			if result.err != nil {
+				log.Printf("Screenshot fetch error for '%s': %v", gameName, result.err)
+			} else {
+				info.Screenshots = append(info.Screenshots, result.url)
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("timeout while fetching screenshots: %w", ctx.Err())
+		}
+	}
+
+	return nil
+}
+
 type IGDBAuthTransport struct {
-    Token     string
-    ClientID  string
-    Transport http.RoundTripper
+	Token     string
+	ClientID  string
+	Transport http.RoundTripper
 }
 
 func (t *IGDBAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-    req.Header.Set("Authorization", "Bearer "+t.Token)
-    req.Header.Set("Client-ID", t.ClientID)
-    return t.Transport.RoundTrip(req)
+	req.Header.Set("Authorization", "Bearer "+t.Token)
+	req.Header.Set("Client-ID", t.ClientID)
+	return t.Transport.RoundTrip(req)
 }
 
 func getIGDBClient(cfg *Config) (*igdb.Client, error) {
-    token, err := getIGDBAccessToken(cfg.IGDBClientID, cfg.IGDBClientSecret)
-    if err != nil {
-        return nil, err
-    }
-    httpClient := &http.Client{
-        Transport: &IGDBAuthTransport{
-            Token:    token,
-            ClientID: cfg.IGDBClientID,
-            Transport: http.DefaultTransport,
-        },
-    }
-    return igdb.NewClient(cfg.IGDBClientID, "", httpClient), nil
+	token, err := getIGDBAccessToken(cfg.IGDBClientID, cfg.IGDBClientSecret)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{
+		Transport: &IGDBAuthTransport{
+			Token:     token,
+			ClientID:  cfg.IGDBClientID,
+			Transport: http.DefaultTransport,
+		},
+	}
+	return igdb.NewClient(cfg.IGDBClientID, "", httpClient), nil
 }
 
 func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
-    url := "https://id.twitch.tv/oauth2/token"
-    data := fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", clientID, clientSecret)
-    resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data))
-    if err != nil {
-        return "", err
-    }
-    defer resp.Body.Close()
-    var res struct {
-        AccessToken string `json:"access_token"`
-    }
-    if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-        return "", err
-    }
-    return res.AccessToken, nil
+	url := "https://id.twitch.tv/oauth2/token"
+	data := fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", clientID, clientSecret)
+	resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var res struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", err
+	}
+	return res.AccessToken, nil
 }
-
-
 
 // Example usage in monitorReddit (for each game):
 // igdbClient, _ := getIGDBClient(cfg)
@@ -364,72 +518,71 @@ func getIGDBAccessToken(clientID, clientSecret string) (string, error) {
 
 // downloadImage downloads an image from a URL and returns the image.Image, its bytes, and format
 func downloadImage(url string) (image.Image, []byte, string, error) {
-    log.Printf("Attempting to download image: %s", url)
-    resp, err := http.Get(url)
-    if err != nil {
-        log.Printf("HTTP request error: %v", err)
-        return nil, nil, "", err
-    }
-    defer resp.Body.Close()
+	log.Printf("Attempting to download image: %s", url)
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("HTTP request error: %v", err)
+		return nil, nil, "", err
+	}
+	defer resp.Body.Close()
 
-    log.Printf("HTTP Status: %s", resp.Status)
-    contentType := resp.Header.Get("Content-Type")
-    log.Printf("Content-Type: %s", contentType)
+	log.Printf("HTTP Status: %s", resp.Status)
+	contentType := resp.Header.Get("Content-Type")
+	log.Printf("Content-Type: %s", contentType)
 
-    imgBytes, err := io.ReadAll(resp.Body)
-    if err != nil {
-        log.Printf("Failed to read body: %v", err)
-        return nil, nil, "", err
-    }
-    if len(imgBytes) < 32 {
-        log.Printf("Image bytes too short: %d", len(imgBytes))
-    }
-    // Print first 16 bytes as hex for debugging
-    log.Printf("First 16 bytes: %x", imgBytes[:min(16, len(imgBytes))])
+	imgBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read body: %v", err)
+		return nil, nil, "", err
+	}
+	if len(imgBytes) < 32 {
+		log.Printf("Image bytes too short: %d", len(imgBytes))
+	}
+	// Print first 16 bytes as hex for debugging
+	log.Printf("First 16 bytes: %x", imgBytes[:min(16, len(imgBytes))])
 
-    // Try generic image.Decode
-    img, format, err := image.Decode(bytes.NewReader(imgBytes))
-    if err == nil {
-        log.Printf("Decoded using image.Decode, format: %s", format)
-        return img, imgBytes, format, nil
-    }
-    log.Printf("image.Decode failed: %v", err)
+	// Try generic image.Decode
+	img, format, err := image.Decode(bytes.NewReader(imgBytes))
+	if err == nil {
+		log.Printf("Decoded using image.Decode, format: %s", format)
+		return img, imgBytes, format, nil
+	}
+	log.Printf("image.Decode failed: %v", err)
 
-    // Try WebP
-    img, errWebp := webp.Decode(bytes.NewReader(imgBytes))
-    if errWebp == nil {
-        log.Printf("Decoded using webp.Decode")
-        return img, imgBytes, "webp", nil
-    }
-    log.Printf("webp.Decode failed: %v", errWebp)
+	// Try WebP
+	img, errWebp := webp.Decode(bytes.NewReader(imgBytes))
+	if errWebp == nil {
+		log.Printf("Decoded using webp.Decode")
+		return img, imgBytes, "webp", nil
+	}
+	log.Printf("webp.Decode failed: %v", errWebp)
 
-    // Try JPEG
-    img, errJpeg := jpeg.Decode(bytes.NewReader(imgBytes))
-    if errJpeg == nil {
-        log.Printf("Decoded using jpeg.Decode")
-        return img, imgBytes, "jpeg", nil
-    }
-    log.Printf("jpeg.Decode failed: %v", errJpeg)
+	// Try JPEG
+	img, errJpeg := jpeg.Decode(bytes.NewReader(imgBytes))
+	if errJpeg == nil {
+		log.Printf("Decoded using jpeg.Decode")
+		return img, imgBytes, "jpeg", nil
+	}
+	log.Printf("jpeg.Decode failed: %v", errJpeg)
 
-    // Try PNG
-    img, errPng := png.Decode(bytes.NewReader(imgBytes))
-    if errPng == nil {
-        log.Printf("Decoded using png.Decode")
-        return img, imgBytes, "png", nil
-    }
-    log.Printf("png.Decode failed: %v", errPng)
+	// Try PNG
+	img, errPng := png.Decode(bytes.NewReader(imgBytes))
+	if errPng == nil {
+		log.Printf("Decoded using png.Decode")
+		return img, imgBytes, "png", nil
+	}
+	log.Printf("png.Decode failed: %v", errPng)
 
-    // All decoders failed
-    return nil, nil, "", err
+	// All decoders failed
+	return nil, nil, "", err
 }
 
 func min(a, b int) int {
-    if a < b {
-        return a
-    }
-    return b
+	if a < b {
+		return a
+	}
+	return b
 }
-
 
 // generateThumbnail resizes the image to the given width and height
 func generateThumbnail(img image.Image, width, height int) image.Image {
@@ -501,39 +654,37 @@ func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, i
 		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
 	}
 
-        content := map[string]interface{}{
-                "msgtype":  "m.image",
-                "body":     caption,
-                "url":      imgURL,
-                "info":     imgInfo,
-                "filename": filename,
-        }
+	content := map[string]interface{}{
+		"msgtype":  "m.image",
+		"body":     caption,
+		"url":      imgURL,
+		"info":     imgInfo,
+		"filename": filename,
+	}
 
+	// Relationship handling
+	if threadRootID != "" {
+		// Threaded reply: replyID is required
+		if replyID == "" {
+			return "", fmt.Errorf("replyID must be set when replying in a thread")
+		}
+		content["m.relates_to"] = map[string]interface{}{
+			"event_id":        threadRootID,
+			"rel_type":        "m.thread",
+			"is_falling_back": true,
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
 
-    // Relationship handling
-    if threadRootID != "" {
-        // Threaded reply: replyID is required
-        if replyID == "" {
-            return "", fmt.Errorf("replyID must be set when replying in a thread")
-        }
-        content["m.relates_to"] = map[string]interface{}{
-            "event_id":        threadRootID,
-            "rel_type":        "m.thread",
-            "is_falling_back": true,
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-
-    } else if replyID != "" {
-        // Normal reply (non-threaded)
-        content["m.relates_to"] = map[string]interface{}{
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-    }
-
+	} else if replyID != "" {
+		// Normal reply (non-threaded)
+		content["m.relates_to"] = map[string]interface{}{
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
+	}
 
 	for k, v := range imgInfo.Additional {
 		content[k] = v
@@ -544,95 +695,89 @@ func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, i
 
 // sendMatrixImage sends an m.image event to the Matrix room with HTML body as well
 func sendMatrixImageHTML(client *mautrix.Client, roomID, caption, htmlCaption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
-        imgInfo.ThumbnailURL = thumbURL
-        imgInfo.ThumbnailInfo = thumbInfo
-        if blurhash != "" {
-                if imgInfo.Additional == nil {
-                        imgInfo.Additional = map[string]interface{}{}
-                }
-                imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
-        }
+	imgInfo.ThumbnailURL = thumbURL
+	imgInfo.ThumbnailInfo = thumbInfo
+	if blurhash != "" {
+		if imgInfo.Additional == nil {
+			imgInfo.Additional = map[string]interface{}{}
+		}
+		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
+	}
 
-        content := map[string]interface{}{
-                "msgtype":  "m.image",
-                "body":     caption,
-                "url":      imgURL,
-                "info":     imgInfo,
-                "filename": filename,
-                "format":         "org.matrix.custom.html",
-                "formatted_body": htmlCaption,
+	content := map[string]interface{}{
+		"msgtype":        "m.image",
+		"body":           caption,
+		"url":            imgURL,
+		"info":           imgInfo,
+		"filename":       filename,
+		"format":         "org.matrix.custom.html",
+		"formatted_body": htmlCaption,
+	}
 
-        }
+	// Relationship handling
+	if threadRootID != "" {
+		// Threaded reply: replyID is required
+		if replyID == "" {
+			return "", fmt.Errorf("replyID must be set when replying in a thread")
+		}
+		content["m.relates_to"] = map[string]interface{}{
+			"event_id":        threadRootID,
+			"rel_type":        "m.thread",
+			"is_falling_back": true,
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
 
+	} else if replyID != "" {
+		// Normal reply (non-threaded)
+		content["m.relates_to"] = map[string]interface{}{
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
+	}
 
-    // Relationship handling
-    if threadRootID != "" {
-        // Threaded reply: replyID is required
-        if replyID == "" {
-            return "", fmt.Errorf("replyID must be set when replying in a thread")
-        }
-        content["m.relates_to"] = map[string]interface{}{
-            "event_id":        threadRootID,
-            "rel_type":        "m.thread",
-            "is_falling_back": true,
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-
-    } else if replyID != "" {
-        // Normal reply (non-threaded)
-        content["m.relates_to"] = map[string]interface{}{
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-    }
-
-
-        for k, v := range imgInfo.Additional {
-                content[k] = v
-        }
-        evt, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
-        return evt.EventID, err
+	for k, v := range imgInfo.Additional {
+		content[k] = v
+	}
+	evt, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
+	return evt.EventID, err
 }
 
-
-
 // sendMatrixText sends a plain text message to Matrix
-func sendMatrixText(client *mautrix.Client, roomID, msg string,threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
+func sendMatrixText(client *mautrix.Client, roomID, msg string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	content := map[string]interface{}{
 		"msgtype": "m.text",
 		"body":    msg,
 	}
 
-    // Relationship handling
-    if threadRootID != "" {
-        // Threaded reply: replyID is required
-        if replyID == "" {
-            return "", fmt.Errorf("replyID must be set when replying in a thread")
-        }
-        content["m.relates_to"] = map[string]interface{}{
-            "event_id":        threadRootID,
-            "rel_type":        "m.thread",
-            "is_falling_back": true,
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
+	// Relationship handling
+	if threadRootID != "" {
+		// Threaded reply: replyID is required
+		if replyID == "" {
+			return "", fmt.Errorf("replyID must be set when replying in a thread")
+		}
+		content["m.relates_to"] = map[string]interface{}{
+			"event_id":        threadRootID,
+			"rel_type":        "m.thread",
+			"is_falling_back": true,
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
 
-    } else if replyID != "" {
-        // Normal reply (non-threaded)
-        content["m.relates_to"] = map[string]interface{}{
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-    }
-
+	} else if replyID != "" {
+		// Normal reply (non-threaded)
+		content["m.relates_to"] = map[string]interface{}{
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
+	}
 
 	evt, err := client.SendMessageEvent(context.Background(), mautrixID.RoomID(roomID), mautrixEvent.EventMessage, content)
-        log.Printf("Event to return: %s", evt.EventID)
+	log.Printf("Event to return: %s", evt.EventID)
 	return evt.EventID, err
 }
 
@@ -655,57 +800,56 @@ func sendMatrixTextMonospace(client *mautrix.Client, roomID, msg string) (mautri
 }
 
 func sendMatrixHTML(
-    client *mautrix.Client,
-    roomID string,
-    plainBody string,
-    htmlBody string,
-    threadRootID mautrixID.EventID, // optional: thread start
-    replyID mautrixID.EventID,      // optional: in reply to
+	client *mautrix.Client,
+	roomID string,
+	plainBody string,
+	htmlBody string,
+	threadRootID mautrixID.EventID, // optional: thread start
+	replyID mautrixID.EventID, // optional: in reply to
 ) (mautrixID.EventID, error) {
 
-    content := map[string]interface{}{
-        "msgtype":        "m.text",
-        "body":           plainBody,
-        "format":         "org.matrix.custom.html",
-        "formatted_body": htmlBody,
-    }
+	content := map[string]interface{}{
+		"msgtype":        "m.text",
+		"body":           plainBody,
+		"format":         "org.matrix.custom.html",
+		"formatted_body": htmlBody,
+	}
 
-    // Relationship handling
-    if threadRootID != "" {
-        // Threaded reply: replyID is required
-        if replyID == "" {
-            return "", fmt.Errorf("replyID must be set when replying in a thread")
-        }
-        content["m.relates_to"] = map[string]interface{}{
-            "event_id":        threadRootID,
-            "rel_type":        "m.thread",
-            "is_falling_back": true,
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
+	// Relationship handling
+	if threadRootID != "" {
+		// Threaded reply: replyID is required
+		if replyID == "" {
+			return "", fmt.Errorf("replyID must be set when replying in a thread")
+		}
+		content["m.relates_to"] = map[string]interface{}{
+			"event_id":        threadRootID,
+			"rel_type":        "m.thread",
+			"is_falling_back": true,
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
 
-    } else if replyID != "" {
-        // Normal reply (non-threaded)
-        content["m.relates_to"] = map[string]interface{}{
-            "m.in_reply_to": map[string]interface{}{
-                "event_id": replyID,
-            },
-        }
-    }
+	} else if replyID != "" {
+		// Normal reply (non-threaded)
+		content["m.relates_to"] = map[string]interface{}{
+			"m.in_reply_to": map[string]interface{}{
+				"event_id": replyID,
+			},
+		}
+	}
 
-    evt, err := client.SendMessageEvent(
-        context.Background(),
-        mautrixID.RoomID(roomID),
-        mautrixEvent.EventMessage,
-        content,
-    )
-    if err != nil {
-        return "", err
-    }
-    return evt.EventID, nil
+	evt, err := client.SendMessageEvent(
+		context.Background(),
+		mautrixID.RoomID(roomID),
+		mautrixEvent.EventMessage,
+		content,
+	)
+	if err != nil {
+		return "", err
+	}
+	return evt.EventID, nil
 }
-
 
 // postIGDBImageToMatrix downloads, thumbs, blurhashes, uploads, and posts an image to Matrix
 func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption string, htmlCaption string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
@@ -732,21 +876,21 @@ func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption strin
 		log.Printf("Failed to upload thumbnail: %v", err)
 		return "", err
 	}
-        if htmlCaption == "" {
-	        EventID, err = sendMatrixImage(client, roomID, caption,  caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur, threadRootID, replyID)
+	if htmlCaption == "" {
+		EventID, err = sendMatrixImage(client, roomID, caption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur, threadRootID, replyID)
 		if err != nil {
 			log.Printf("Failed to send image event: %v", err)
 			return "", err
 		}
 	} else {
-                EventID, err = sendMatrixImageHTML(client, roomID, caption, htmlCaption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur, threadRootID, replyID)
-                if err != nil {
-                        log.Printf("Failed to send image event: %v", err)
+		EventID, err = sendMatrixImageHTML(client, roomID, caption, htmlCaption, caption+".webp", imgURLMXC, thumbURLMXC, imgInfo, thumbInfo, blur, threadRootID, replyID)
+		if err != nil {
+			log.Printf("Failed to send image event: %v", err)
 			return "", err
-                }
+		}
 	}
 
-        return EventID, err
+	return EventID, err
 }
 
 // DB schema: processed_posts(post_id TEXT PRIMARY KEY)
