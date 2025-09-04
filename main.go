@@ -71,12 +71,29 @@ func saveConfig(path string, cfg *Config) error {
 func getMatrixClient(cfg *Config, configPath string) (*mautrix.Client, error) {
 	var client *mautrix.Client
 	var err error
+
+	// First, try to use existing access token if available
 	if cfg.MatrixAccessToken != "" {
 		client, err = mautrix.NewClient(cfg.MatrixHomeserver, "", cfg.MatrixAccessToken)
 		if err != nil {
 			return nil, err
 		}
-	} else if cfg.MatrixUser != "" && cfg.MatrixPassword != "" {
+
+		// Test if the token is still valid by making a simple API call
+		_, err = client.Whoami(context.Background())
+		if err != nil {
+			log.Printf("Access token is invalid, attempting to refresh: %v", err)
+			// Token is invalid, we'll need to refresh it
+			client = nil
+		} else {
+			// Token is valid, return the client
+			return client, nil
+		}
+	}
+
+	// If we reach here, either no token was provided or the existing token is invalid
+	// Try to get a new token using username/password
+	if cfg.MatrixUser != "" && cfg.MatrixPassword != "" {
 		client, err = mautrix.NewClient(cfg.MatrixHomeserver, "", "")
 		if err != nil {
 			return nil, err
@@ -93,6 +110,8 @@ func getMatrixClient(cfg *Config, configPath string) (*mautrix.Client, error) {
 		saveErr := saveConfig(configPath, cfg)
 		if saveErr != nil {
 			log.Printf("Warning: failed to save new access token to config: %v", saveErr)
+		} else {
+			log.Printf("Successfully refreshed Matrix access token and saved to config")
 		}
 	} else {
 		return nil, fmt.Errorf("no Matrix access token or user/pass provided")
