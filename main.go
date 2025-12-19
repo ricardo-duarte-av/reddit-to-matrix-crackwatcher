@@ -881,7 +881,24 @@ func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption strin
 	var (
 		EventID mautrixID.EventID
 	)
-	thumb := generateThumbnail(img, 225, 300)
+	// Calculate thumbnail dimensions preserving aspect ratio
+	// Max dimension is 400 pixels
+	origWidth := img.Bounds().Dx()
+	origHeight := img.Bounds().Dy()
+	maxThumbSize := 400
+	thumbWidth := maxThumbSize
+	thumbHeight := maxThumbSize
+
+	// Preserve aspect ratio
+	if origWidth > origHeight {
+		// Landscape: width is the limiting factor
+		thumbHeight = (maxThumbSize * origHeight) / origWidth
+	} else {
+		// Portrait or square: height is the limiting factor
+		thumbWidth = (maxThumbSize * origWidth) / origHeight
+	}
+
+	thumb := generateThumbnail(img, thumbWidth, thumbHeight)
 	thumbBytes, _ := encodeImage(thumb, format)
 	blur, _ := calcBlurhash(thumb)
 	imgMimetype := "image/" + format
