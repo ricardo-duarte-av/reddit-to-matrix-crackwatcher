@@ -639,6 +639,7 @@ type MatrixImageInfo struct {
 	H             int                    `json:"h,omitempty"`
 	ThumbnailURL  string                 `json:"thumbnail_url,omitempty"`
 	ThumbnailInfo *MatrixImageInfo       `json:"thumbnail_info,omitempty"`
+	Blurhash      string                 `json:"xyz.amorgan.blurhash,omitempty"`
 	Additional    map[string]interface{} `json:"-"`
 }
 
@@ -666,12 +667,7 @@ func uploadToMatrix(client *mautrix.Client, filename string, imgBytes []byte, mi
 func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	imgInfo.ThumbnailURL = thumbURL
 	imgInfo.ThumbnailInfo = thumbInfo
-	if blurhash != "" {
-		if imgInfo.Additional == nil {
-			imgInfo.Additional = map[string]interface{}{}
-		}
-		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
-	}
+	imgInfo.Blurhash = blurhash
 
 	content := map[string]interface{}{
 		"msgtype":  "m.image",
@@ -716,12 +712,7 @@ func sendMatrixImage(client *mautrix.Client, roomID, caption, filename string, i
 func sendMatrixImageHTML(client *mautrix.Client, roomID, caption, htmlCaption, filename string, imgURL, thumbURL string, imgInfo, thumbInfo *MatrixImageInfo, blurhash string, threadRootID mautrixID.EventID, replyID mautrixID.EventID) (mautrixID.EventID, error) {
 	imgInfo.ThumbnailURL = thumbURL
 	imgInfo.ThumbnailInfo = thumbInfo
-	if blurhash != "" {
-		if imgInfo.Additional == nil {
-			imgInfo.Additional = map[string]interface{}{}
-		}
-		imgInfo.Additional["xyz.amorgan.blurhash"] = blurhash
-	}
+	imgInfo.Blurhash = blurhash
 
 	content := map[string]interface{}{
 		"msgtype":        "m.image",
