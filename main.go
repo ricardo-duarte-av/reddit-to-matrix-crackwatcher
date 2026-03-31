@@ -890,7 +890,10 @@ func postIGDBImageToMatrix(client *mautrix.Client, roomID, imgURL, caption strin
 
 	thumb := generateThumbnail(img, thumbWidth, thumbHeight)
 	thumbBytes, _ := encodeImage(thumb, format)
-	blur, _ := calcBlurhash(thumb)
+	blur := ""
+	if thumbDecoded, _, decErr := image.Decode(bytes.NewReader(thumbBytes)); decErr == nil {
+		blur, _ = calcBlurhash(thumbDecoded)
+	}
 	imgMimetype := "image/" + format
 	thumbMimetype := imgMimetype
 	imgURLMXC, imgInfo, err := uploadToMatrix(client, caption+".webp", imgBytes, imgMimetype, img.Bounds().Dx(), img.Bounds().Dy())
