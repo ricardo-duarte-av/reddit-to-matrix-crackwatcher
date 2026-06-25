@@ -33,3 +33,7 @@ go.work.sum
 
 config.json
 processed_posts.db
+
+# Compiled binary
+/reddit-to-matrix-crackwatcher
+/reddit-to-matrix-crackwatch
