@@ -67,6 +67,54 @@ func convertLinks(s string) string {
 	return re.ReplaceAllString(s, `<a href="$2">$1</a>`)
 }
 
+var (
+	mdLinkRe  = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	mdEmphRe  = regexp.MustCompile(`(\*\*|\*|__|_|~~|` + "`" + `)`)
+	mdSpaceRe = regexp.MustCompile(`\s+`)
+
+	// editionSuffixRe matches a single trailing edition/version/release
+	// qualifier. It is applied repeatedly so stacked suffixes like
+	// "Deluxe Edition Hypervisor" are removed one token at a time.
+	//
+	// Only a fixed whitelist of qualifiers is stripped — arbitrary trailing
+	// words are left intact so real titles like "Workers and Resources Soviet
+	// Republic" and DLC names like "Frostpunk 2 Breach of Trust" survive.
+	editionSuffixRe = regexp.MustCompile(`(?i)\s+(` +
+		`hypervisor|` +
+		`(collector'?s|deluxe|digital deluxe|ultimate|definitive|enhanced|special|gold|premium|anniversary|complete|explorer|standard|game of the year)\s+edition|` +
+		`sammleredition|` +
+		`director'?s\s+cut|` +
+		`game of the year edition|goty|` +
+		`remastered|remaster|` +
+		`enhanced|complete|` +
+		`uhd` +
+		`)$`)
+)
+
+// cleanGameName strips Markdown formatting (links, bold/italic/strikethrough,
+// inline code) and trailing edition/release qualifiers from a game name so it
+// can be used as a plain IGDB search query.
+func cleanGameName(name string) string {
+	// [text](url) -> text
+	name = mdLinkRe.ReplaceAllString(name, "$1")
+	// remove emphasis/code markers
+	name = mdEmphRe.ReplaceAllString(name, "")
+	// collapse whitespace
+	name = mdSpaceRe.ReplaceAllString(name, " ")
+	name = strings.TrimSpace(name)
+
+	// Strip trailing edition/release qualifiers iteratively. Stop if stripping
+	// would empty the title (e.g. a game literally named "Complete").
+	for {
+		stripped := strings.TrimSpace(editionSuffixRe.ReplaceAllString(name, ""))
+		if stripped == name || stripped == "" {
+			break
+		}
+		name = stripped
+	}
+	return name
+}
+
 // format IGDB info to a Matrix message
 func formatIGDBToHTML(info *IGDBGameInfo) (plainBody string, htmlBody string) {
     // Format date

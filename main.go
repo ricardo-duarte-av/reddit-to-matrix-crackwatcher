@@ -298,6 +298,10 @@ func fetchIGDBInfo(client *igdb.Client, name string) (*IGDBGameInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Strip any Markdown formatting (e.g. **bold**, links) from the title so
+	// IGDB receives a plain search query.
+	name = cleanGameName(name)
+
 	// Search for the game with a higher limit to get multiple results
 	games, err := client.Games.Search(name, igdb.SetFields("name,first_release_date,summary,storyline,slug,cover,screenshots"), igdb.SetLimit(10))
 	if err != nil {
